@@ -152,10 +152,30 @@ app.get("/nba/teamstats", async (req, res) => {
   nbaUrl.searchParams.set("MeasureType", "Base");
 
   try {
+    // 1) Prime cookies from nba.com (helps with some edge behaviors)
+    const prime = await axios.get("https://www.nba.com", {
+      httpsAgent,
+      timeout: 20000,
+      decompress: true,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      },
+      validateStatus: () => true
+    });
+
+    const setCookies = prime.headers["set-cookie"] || [];
+    const cookieHeader = Array.isArray(setCookies)
+      ? setCookies.map((c) => c.split(";")[0]).join("; ")
+      : "";
+
+    // 2) Call stats.nba.com with strict headers + cookies
     const nbaResp = await axios.get(nbaUrl.toString(), {
       httpsAgent,
-      timeout: 30000,
+      timeout: 45000,
       decompress: true,
+      responseType: "arraybuffer",
       headers: {
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
@@ -169,34 +189,43 @@ app.get("/nba/teamstats", async (req, res) => {
         "x-nba-stats-token": "true",
         "Sec-Fetch-Site": "same-site",
         "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Dest": "empty"
+        "Sec-Fetch-Dest": "empty",
+        ...(cookieHeader ? { "Cookie": cookieHeader } : {})
       },
       validateStatus: () => true
     });
 
+    // CORS
     setCors(res);
 
-    // If NBA returns an HTML block page, this helps you see it quickly.
     const ct = (nbaResp.headers["content-type"] ?? "").toLowerCase();
-    if (!ct.includes("application/json")) {
-      return res.status(502).json({
-        ok: false,
-        error: "Unexpected content-type from stats.nba.com",
-        status: nbaResp.status,
-        contentType: nbaResp.headers["content-type"] ?? null,
-        // Only include a small snippet to avoid huge HTML dumps
-        snippet:
-          typeof nbaResp.data === "string"
-            ? nbaResp.data.slice(0, 400)
-            : null
-      });
+    const rawText = Buffer.from(nbaResp.data || []).toString("utf8");
+    const snippet = rawText.slice(0, 500);
+
+    // If JSON, return it
+    if (ct.includes("application/json") || snippet.trim().startsWith("{")) {
+      try {
+        const json = JSON.parse(rawText);
+        return res.status(nbaResp.status).json(json);
+      } catch {
+        // Fall through to debug response if JSON parse fails
+      }
     }
 
-    // Pass through NBA JSON as-is
-    res.status(nbaResp.status).json(nbaResp.data);
+    // Otherwise return a debug payload so we can see what NBA is sending
+    return res.status(502).json({
+      ok: false,
+      error: "Upstream did not return JSON",
+      upstreamStatus: nbaResp.status,
+      contentType: nbaResp.headers["content-type"] ?? null,
+      headerKeys: Object.keys(nbaResp.headers || {}),
+      primeStatus: prime.status,
+      primeSetCookieCount: Array.isArray(setCookies) ? setCookies.length : 0,
+      snippet
+    });
   } catch (err) {
     setCors(res);
-    res.status(500).json({
+    return res.status(500).json({
       error: "NBA request failed",
       details: err?.message ?? String(err),
       code: err?.code ?? null
