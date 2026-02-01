@@ -147,7 +147,7 @@ app.get("/nba/teamstats", async (req, res) => {
 
   const nbaUrl = new URL("https://stats.nba.com/stats/leaguedashteamstats");
 
-  // --- Full default param set (helps avoid backend/edge 500s)
+  // --- Full default param set (stable for this endpoint)
   nbaUrl.searchParams.set("Season", season);
   nbaUrl.searchParams.set("SeasonType", seasonType);
   nbaUrl.searchParams.set("LeagueID", "00");
@@ -179,12 +179,15 @@ app.get("/nba/teamstats", async (req, res) => {
   nbaUrl.searchParams.set("PlayerExperience", "");
   nbaUrl.searchParams.set("PlayerPosition", "");
   nbaUrl.searchParams.set("StarterBench", "");
-  nbaUrl.searchParams.set("TwoWay", "0");
-  nbaUrl.searchParams.set("ISTRound", "0");
+  nbaUrl.searchParams.set("TwoWay", "");         // <-- important (not "0")
   nbaUrl.searchParams.set("VsConference", "");
   nbaUrl.searchParams.set("VsDivision", "");
-  nbaUrl.searchParams.set("Height", "");
-  nbaUrl.searchParams.set("Weight", "");
+
+  // Remove these if you added them:
+  // nbaUrl.searchParams.set("ISTRound", "0");    // <-- delete
+  // nbaUrl.searchParams.set("Height", "");       // optional; safe to omit
+  // nbaUrl.searchParams.set("Weight", "");       // optional; safe to omit
+
 
   try {
     // 1) Prime cookies from nba.com (helps with some edge behaviors)
