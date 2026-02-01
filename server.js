@@ -1,14 +1,58 @@
 import express from "express";
-import fetch from "node-fetch";
+import axios from "axios";
+import https from "https";
 
 const app = express();
 
-// --- Basic health check (use this to verify Railway is up)
 app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "nba-stats-proxy" });
 });
 
-// --- NBA.com proxy: team stats (FGA, FG3A, etc.)
+// A diagnostic endpoint to prove what Railway can/can't reach
+app.get("/probe", async (_req, res) => {
+  const httpsAgent = new https.Agent({ keepAlive: true });
+
+  const targets = [
+    "https://www.google.com",
+    "https://www.nba.com",
+    "https://stats.nba.com/stats/leaguedashteamstats?LeagueID=00&Season=2024-25&SeasonType=Regular%20Season&PerMode=Totals&MeasureType=Base"
+  ];
+
+  const results = [];
+  for (const url of targets) {
+    try {
+      const r = await axios.get(url, {
+        httpsAgent,
+        timeout: 15000,
+        // Minimal headers for non-stats urls; NBA stats needs more but this is still useful
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/json;q=0.9,*/*;q=0.8"
+        },
+        validateStatus: () => true
+      });
+
+      results.push({
+        url,
+        ok: true,
+        status: r.status,
+        contentType: r.headers["content-type"] ?? null
+      });
+    } catch (e) {
+      results.push({
+        url,
+        ok: false,
+        error: e?.message ?? String(e),
+        code: e?.code ?? null
+      });
+    }
+  }
+
+  res.json({ ok: true, results });
+});
+
+// NBA.com Team Stats proxy (this is the real one)
 app.get("/nba/teamstats", async (req, res) => {
   const season = req.query.season ?? "2025-26";
   const seasonType = req.query.seasonType ?? "Regular Season";
@@ -16,12 +60,16 @@ app.get("/nba/teamstats", async (req, res) => {
   const nbaUrl = new URL("https://stats.nba.com/stats/leaguedashteamstats");
   nbaUrl.searchParams.set("Season", season);
   nbaUrl.searchParams.set("SeasonType", seasonType);
+  nbaUrl.searchParams.set("LeagueID", "00");
   nbaUrl.searchParams.set("PerMode", "Totals");
   nbaUrl.searchParams.set("MeasureType", "Base");
-  nbaUrl.searchParams.set("LeagueID", "00");
+
+  const httpsAgent = new https.Agent({ keepAlive: true });
 
   try {
-    const nbaResp = await fetch(nbaUrl.toString(), {
+    const nbaResp = await axios.get(nbaUrl.toString(), {
+      httpsAgent,
+      timeout: 20000,
       headers: {
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
@@ -31,26 +79,25 @@ app.get("/nba/teamstats", async (req, res) => {
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "x-nba-stats-origin": "stats",
         "x-nba-stats-token": "true"
-      }
+      },
+      validateStatus: () => true
     });
 
-    const text = await nbaResp.text();
-
-    // CORS for Supabase / browser testing
+    // CORS
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-    res.status(nbaResp.status).type("application/json").send(text);
+    res.status(nbaResp.status).json(nbaResp.data);
   } catch (err) {
     res.status(500).json({
       error: "NBA request failed",
-      details: String(err)
+      details: err?.message ?? String(err),
+      code: err?.code ?? null
     });
   }
 });
 
-// --- CORS preflight (optional, but safe)
+// CORS preflight
 app.options("*", (_req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
