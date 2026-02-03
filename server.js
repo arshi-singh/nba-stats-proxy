@@ -145,6 +145,14 @@ app.get("/nba/teamstats", async (req, res) => {
   const season = req.query.season ?? "2025-26";
   const seasonType = req.query.seasonType ?? "Regular Season";
 
+  // ✅ NEW: allow caller to override these
+  // Examples:
+  //   ?measureType=Advanced
+  //   ?perMode=PerGame
+  // Defaults keep your current behavior stable
+  const measureType = req.query.measureType ?? "Base";
+  const perMode = req.query.perMode ?? "Totals";
+
   const nbaUrl = new URL("https://stats.nba.com/stats/leaguedashteamstats");
 
   // --- Full default param set (stable for this endpoint)
@@ -152,8 +160,9 @@ app.get("/nba/teamstats", async (req, res) => {
   nbaUrl.searchParams.set("SeasonType", seasonType);
   nbaUrl.searchParams.set("LeagueID", "00");
 
-  nbaUrl.searchParams.set("PerMode", "Totals");
-  nbaUrl.searchParams.set("MeasureType", "Base");
+  // ✅ UPDATED: use pass-through values instead of hardcoding
+  nbaUrl.searchParams.set("PerMode", perMode);
+  nbaUrl.searchParams.set("MeasureType", measureType);
 
   nbaUrl.searchParams.set("PlusMinus", "N");
   nbaUrl.searchParams.set("PaceAdjust", "N");
@@ -179,15 +188,18 @@ app.get("/nba/teamstats", async (req, res) => {
   nbaUrl.searchParams.set("PlayerExperience", "");
   nbaUrl.searchParams.set("PlayerPosition", "");
   nbaUrl.searchParams.set("StarterBench", "");
-  nbaUrl.searchParams.set("TwoWay", "");         // <-- important (not "0")
+  nbaUrl.searchParams.set("TwoWay", ""); // keep as you had it
   nbaUrl.searchParams.set("VsConference", "");
   nbaUrl.searchParams.set("VsDivision", "");
 
-  // Remove these if you added them:
-  // nbaUrl.searchParams.set("ISTRound", "0");    // <-- delete
-  // nbaUrl.searchParams.set("Height", "");       // optional; safe to omit
-  // nbaUrl.searchParams.set("Weight", "");       // optional; safe to omit
-
+  // ✅ helpful debug so you can confirm it’s honoring params
+  console.log("[/nba/teamstats]", {
+    season,
+    seasonType,
+    measureType,
+    perMode,
+    url: nbaUrl.toString(),
+  });
 
   try {
     // 1) Prime cookies from nba.com (helps with some edge behaviors)
@@ -198,10 +210,13 @@ app.get("/nba/teamstats", async (req, res) => {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       },
-      validateStatus: () => true
+      validateStatus: () => true,
     });
+
+    // ... keep the rest of your existing logic exactly as-is
+
 
     const setCookies = prime.headers["set-cookie"] || [];
     const cookieHeader = Array.isArray(setCookies)
