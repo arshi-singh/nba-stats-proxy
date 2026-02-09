@@ -120,7 +120,42 @@ app.get("/probe-nba", async (_req, res) => {
 });
 
 /**
- * ✅ FIXED: /nba/teamstats with Location pass-through
+ * Helpers for DateFrom/DateTo pass-through
+ * NBA stats expects MM/DD/YYYY in DateFrom/DateTo.
+ */
+function pickQuery(req, ...keys) {
+  for (const k of keys) {
+    const v = req.query?.[k];
+    if (v != null && String(v).trim() !== "") return String(v).trim();
+  }
+  return "";
+}
+
+function isoToNbaDate(v) {
+  if (!v) return "";
+  const s = String(v).trim();
+
+  // Already MM/DD/YYYY
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
+
+  // Convert YYYY-MM-DD -> MM/DD/YYYY
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    const [, yyyy, mm, dd] = m;
+    return `${mm}/${dd}/${yyyy}`;
+  }
+
+  // Unknown format: pass through (NBA may ignore, but we don't break)
+  return s;
+}
+
+/**
+ * ✅ UPDATED: /nba/teamstats with Location + DateFrom/DateTo pass-through
+ *
+ * Supports:
+ * - Location / location = Home|Road|Neutral
+ * - DateFrom / dateFrom (YYYY-MM-DD or MM/DD/YYYY)
+ * - DateTo / dateTo     (YYYY-MM-DD or MM/DD/YYYY)
  */
 app.get("/nba/teamstats", async (req, res) => {
   const season = req.query.season ?? "2025-26";
@@ -136,6 +171,14 @@ app.get("/nba/teamstats", async (req, res) => {
 
   const allowedLocations = new Set(["", "Home", "Road", "Neutral"]);
   const locationFinal = allowedLocations.has(locationNorm) ? locationNorm : "";
+
+  // ✅ NEW: DateFrom/DateTo pass-through (try multiple casings)
+  const rawDateFrom = pickQuery(req, "DateFrom", "dateFrom");
+  const rawDateTo = pickQuery(req, "DateTo", "dateTo");
+
+  // Convert ISO -> MM/DD/YYYY for NBA
+  const dateFromFinal = isoToNbaDate(rawDateFrom);
+  const dateToFinal = isoToNbaDate(rawDateTo);
 
   const nbaUrl = new URL("https://stats.nba.com/stats/leaguedashteamstats");
 
@@ -163,8 +206,11 @@ app.get("/nba/teamstats", async (req, res) => {
 
   nbaUrl.searchParams.set("Outcome", "");
   nbaUrl.searchParams.set("SeasonSegment", "");
-  nbaUrl.searchParams.set("DateFrom", "");
-  nbaUrl.searchParams.set("DateTo", "");
+
+  // ✅ UPDATED: these were hardcoded to "" before (causing NULL upstream)
+  nbaUrl.searchParams.set("DateFrom", dateFromFinal);
+  nbaUrl.searchParams.set("DateTo", dateToFinal);
+
   nbaUrl.searchParams.set("GameSegment", "");
   nbaUrl.searchParams.set("ShotClockRange", "");
   nbaUrl.searchParams.set("GameScope", "");
@@ -181,6 +227,10 @@ app.get("/nba/teamstats", async (req, res) => {
     measureType,
     perMode,
     locationFinal,
+    rawDateFrom,
+    rawDateTo,
+    dateFromFinal,
+    dateToFinal,
     url: nbaUrl.toString(),
   });
 
@@ -249,6 +299,8 @@ app.get("/nba/teamstats", async (req, res) => {
       contentType: nbaResp.headers["content-type"] ?? null,
       primeStatus: prime.status,
       locationFinal,
+      dateFromFinal,
+      dateToFinal,
       snippet,
     });
   } catch (err) {
