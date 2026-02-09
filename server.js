@@ -1,28 +1,139 @@
+import express from "express";
+import axios from "axios";
+import https from "https";
+
+const app = express();
+
 /**
- * Main endpoint: NBA team stats (includes FGA, FG3A, FG3_PCT, etc.)
- * Query params:
- *  - season: "2024-25" (default)
- *  - seasonType: "Regular Season" (default)
- *  - measureType: "Base" | "Advanced" (default "Base")
- *  - perMode: "Totals" | "PerGame" (default "Totals")
- *  - Location: "Home" | "Road" | "" (optional)
- *    (Also accepts lowercase location=...)
+ * Shared HTTPS agent
+ */
+const httpsAgent = new https.Agent({ keepAlive: true });
+
+function setCors(res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+app.options("*", (_req, res) => {
+  setCors(res);
+  res.status(204).send();
+});
+
+app.get("/health", (_req, res) => {
+  res.json({ ok: true, service: "nba-stats-proxy" });
+});
+
+app.get("/probe", async (_req, res) => {
+  const targets = [
+    "https://www.google.com",
+    "https://www.nba.com",
+    "https://stats.nba.com/stats/leaguedashteamstats?LeagueID=00&Season=2024-25&SeasonType=Regular%20Season&PerMode=Totals&MeasureType=Base",
+  ];
+
+  const results = [];
+
+  for (const url of targets) {
+    try {
+      const r = await axios.get(url, {
+        httpsAgent,
+        timeout: 15000,
+        decompress: true,
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+        },
+        validateStatus: () => true,
+      });
+
+      results.push({
+        url,
+        ok: true,
+        status: r.status,
+        contentType: r.headers["content-type"] ?? null,
+      });
+    } catch (e) {
+      results.push({
+        url,
+        ok: false,
+        error: e?.message ?? String(e),
+        code: e?.code ?? null,
+      });
+    }
+  }
+
+  res.json({ ok: true, results });
+});
+
+app.get("/probe-nba", async (_req, res) => {
+  const testUrl =
+    "https://stats.nba.com/stats/leaguedashteamstats?LeagueID=00&Season=2024-25&SeasonType=Regular%20Season&PerMode=Totals&MeasureType=Base";
+
+  try {
+    const r = await axios.get(testUrl, {
+      httpsAgent,
+      timeout: 30000,
+      decompress: true,
+      headers: {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Host": "stats.nba.com",
+        "Origin": "https://www.nba.com",
+        "Referer": "https://www.nba.com/stats/teams/traditional",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "x-nba-stats-origin": "stats",
+        "x-nba-stats-token": "true",
+        "Sec-Fetch-Site": "same-site",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Dest": "empty",
+      },
+      validateStatus: () => true,
+    });
+
+    setCors(res);
+
+    const data = r.data;
+    const firstHeaders =
+      data?.resultSets?.[0]?.headers?.slice?.(0, 12) ??
+      data?.resultSet?.headers?.slice?.(0, 12) ??
+      null;
+
+    res.status(200).json({
+      ok: true,
+      status: r.status,
+      contentType: r.headers["content-type"] ?? null,
+      topLevelKeys: data ? Object.keys(data) : [],
+      sampleHeaders: firstHeaders,
+    });
+  } catch (e) {
+    setCors(res);
+    res.status(500).json({
+      ok: false,
+      error: e?.message ?? String(e),
+      code: e?.code ?? null,
+    });
+  }
+});
+
+/**
+ * ✅ FIXED: /nba/teamstats with Location pass-through
  */
 app.get("/nba/teamstats", async (req, res) => {
   const season = req.query.season ?? "2025-26";
   const seasonType = req.query.seasonType ?? "Regular Season";
-
   const measureType = req.query.measureType ?? "Base";
   const perMode = req.query.perMode ?? "Totals";
 
-  // ✅ PASS-THROUGH LOCATION (fix)
-  // Accept Location or location; normalize; allow Home/Road; blank means overall
-  const rawLocation = (req.query.Location ?? req.query.location ?? "").toString().trim();
+  // pass-through Location (or location)
+  const rawLocation = String(req.query.Location ?? req.query.location ?? "").trim();
   const locationNorm = rawLocation
     ? rawLocation.charAt(0).toUpperCase() + rawLocation.slice(1).toLowerCase()
-    : ""; // "" => overall
+    : "";
 
-  // Only allow known values to avoid weird upstream behavior
   const allowedLocations = new Set(["", "Home", "Road", "Neutral"]);
   const locationFinal = allowedLocations.has(locationNorm) ? locationNorm : "";
 
@@ -48,9 +159,6 @@ app.get("/nba/teamstats", async (req, res) => {
 
   nbaUrl.searchParams.set("Conference", "");
   nbaUrl.searchParams.set("Division", "");
-
-  // ✅ HERE: do NOT force Location to ""
-  // If caller didn't pass Location, we keep it blank (overall).
   nbaUrl.searchParams.set("Location", locationFinal);
 
   nbaUrl.searchParams.set("Outcome", "");
@@ -114,14 +222,14 @@ app.get("/nba/teamstats", async (req, res) => {
         "Sec-Fetch-Site": "same-site",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Dest": "empty",
-        ...(cookieHeader ? { Cookie: cookieHeader } : {})
+        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
       },
-      validateStatus: () => true
+      validateStatus: () => true,
     });
 
     setCors(res);
 
-    const ct = (nbaResp.headers["content-type"] ?? "").toLowerCase();
+    const ct = String(nbaResp.headers["content-type"] ?? "").toLowerCase();
     const rawText = Buffer.from(nbaResp.data || []).toString("utf8");
     const snippet = rawText.slice(0, 500);
 
@@ -130,7 +238,7 @@ app.get("/nba/teamstats", async (req, res) => {
         const json = JSON.parse(rawText);
         return res.status(nbaResp.status).json(json);
       } catch {
-        // fall through
+        // fall through to debug
       }
     }
 
@@ -139,19 +247,19 @@ app.get("/nba/teamstats", async (req, res) => {
       error: "Upstream did not return JSON",
       upstreamStatus: nbaResp.status,
       contentType: nbaResp.headers["content-type"] ?? null,
-      headerKeys: Object.keys(nbaResp.headers || {}),
       primeStatus: prime.status,
-      primeSetCookieCount: Array.isArray(setCookies) ? setCookies.length : 0,
-      // ✅ include location we tried
       locationFinal,
-      snippet
+      snippet,
     });
   } catch (err) {
     setCors(res);
     return res.status(500).json({
       error: "NBA request failed",
       details: err?.message ?? String(err),
-      code: err?.code ?? null
+      code: err?.code ?? null,
     });
   }
 });
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Listening on ${PORT}`));
