@@ -322,7 +322,7 @@ app.get("/nba/teamstats", async (req, res) => {
 });
 
 /**
- * ✅ NEW: /nba/teamdashboard
+ * ✅ UPDATED: /nba/teamdashboard
  *
  * Calls: https://stats.nba.com/stats/teamdashboardbygeneralsplits
  *
@@ -334,7 +334,7 @@ app.get("/nba/teamstats", async (req, res) => {
  * - seasonType (default Regular Season)
  * - perMode (default Totals)
  *
- * This endpoint includes result sets such as "DaysRest" (we will parse in Edge Function).
+ * Key: this endpoint includes result sets such as "DaysRest"
  */
 app.get("/nba/teamdashboard", async (req, res) => {
   const season = req.query.season ?? "2025-26";
