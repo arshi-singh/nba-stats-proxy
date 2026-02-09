@@ -150,12 +150,85 @@ function isoToNbaDate(v) {
 }
 
 /**
- * ✅ UPDATED: /nba/teamstats with Location + DateFrom/DateTo pass-through
- *
- * Supports:
- * - Location / location = Home|Road|Neutral
- * - DateFrom / dateFrom (YYYY-MM-DD or MM/DD/YYYY)
- * - DateTo / dateTo     (YYYY-MM-DD or MM/DD/YYYY)
+ * Shared: prime cookies + fetch NBA JSON
+ */
+async function primeCookies() {
+  const prime = await axios.get("https://www.nba.com", {
+    httpsAgent,
+    timeout: 20000,
+    decompress: true,
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    },
+    validateStatus: () => true,
+  });
+
+  const setCookies = prime.headers["set-cookie"] || [];
+  const cookieHeader = Array.isArray(setCookies)
+    ? setCookies.map((c) => c.split(";")[0]).join("; ")
+    : "";
+
+  return { primeStatus: prime.status, cookieHeader };
+}
+
+async function fetchNbaJson(url) {
+  const { primeStatus, cookieHeader } = await primeCookies();
+
+  const nbaResp = await axios.get(url, {
+    httpsAgent,
+    timeout: 45000,
+    decompress: true,
+    responseType: "arraybuffer",
+    headers: {
+      "Accept": "application/json, text/plain, */*",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Connection": "keep-alive",
+      "Host": "stats.nba.com",
+      "Origin": "https://www.nba.com",
+      "Referer": "https://www.nba.com/stats/teams/traditional",
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "x-nba-stats-origin": "stats",
+      "x-nba-stats-token": "true",
+      "Sec-Fetch-Site": "same-site",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Dest": "empty",
+      ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+    },
+    validateStatus: () => true,
+  });
+
+  const ct = String(nbaResp.headers["content-type"] ?? "").toLowerCase();
+  const rawText = Buffer.from(nbaResp.data || []).toString("utf8");
+  const snippet = rawText.slice(0, 500);
+
+  // Try parse JSON (even if ct is weird)
+  if (ct.includes("application/json") || snippet.trim().startsWith("{")) {
+    try {
+      const json = JSON.parse(rawText);
+      return { ok: true, status: nbaResp.status, json, primeStatus };
+    } catch {
+      // fall through
+    }
+  }
+
+  return {
+    ok: false,
+    status: 502,
+    primeStatus,
+    error: "Upstream did not return JSON",
+    upstreamStatus: nbaResp.status,
+    contentType: nbaResp.headers["content-type"] ?? null,
+    snippet,
+  };
+}
+
+/**
+ * ✅ /nba/teamstats (unchanged behavior)
+ * Location + DateFrom/DateTo pass-through
  */
 app.get("/nba/teamstats", async (req, res) => {
   const season = req.query.season ?? "2025-26";
@@ -172,7 +245,7 @@ app.get("/nba/teamstats", async (req, res) => {
   const allowedLocations = new Set(["", "Home", "Road", "Neutral"]);
   const locationFinal = allowedLocations.has(locationNorm) ? locationNorm : "";
 
-  // ✅ NEW: DateFrom/DateTo pass-through (try multiple casings)
+  // DateFrom/DateTo pass-through (try multiple casings)
   const rawDateFrom = pickQuery(req, "DateFrom", "dateFrom");
   const rawDateTo = pickQuery(req, "DateTo", "dateTo");
 
@@ -207,7 +280,6 @@ app.get("/nba/teamstats", async (req, res) => {
   nbaUrl.searchParams.set("Outcome", "");
   nbaUrl.searchParams.set("SeasonSegment", "");
 
-  // ✅ UPDATED: these were hardcoded to "" before (causing NULL upstream)
   nbaUrl.searchParams.set("DateFrom", dateFromFinal);
   nbaUrl.searchParams.set("DateTo", dateToFinal);
 
@@ -235,74 +307,94 @@ app.get("/nba/teamstats", async (req, res) => {
   });
 
   try {
-    const prime = await axios.get("https://www.nba.com", {
-      httpsAgent,
-      timeout: 20000,
-      decompress: true,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      },
-      validateStatus: () => true,
-    });
-
-    const setCookies = prime.headers["set-cookie"] || [];
-    const cookieHeader = Array.isArray(setCookies)
-      ? setCookies.map((c) => c.split(";")[0]).join("; ")
-      : "";
-
-    const nbaResp = await axios.get(nbaUrl.toString(), {
-      httpsAgent,
-      timeout: 45000,
-      decompress: true,
-      responseType: "arraybuffer",
-      headers: {
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Host": "stats.nba.com",
-        "Origin": "https://www.nba.com",
-        "Referer": "https://www.nba.com/stats/teams/traditional",
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "x-nba-stats-origin": "stats",
-        "x-nba-stats-token": "true",
-        "Sec-Fetch-Site": "same-site",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Dest": "empty",
-        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
-      },
-      validateStatus: () => true,
-    });
-
+    const out = await fetchNbaJson(nbaUrl.toString());
     setCors(res);
-
-    const ct = String(nbaResp.headers["content-type"] ?? "").toLowerCase();
-    const rawText = Buffer.from(nbaResp.data || []).toString("utf8");
-    const snippet = rawText.slice(0, 500);
-
-    if (ct.includes("application/json") || snippet.trim().startsWith("{")) {
-      try {
-        const json = JSON.parse(rawText);
-        return res.status(nbaResp.status).json(json);
-      } catch {
-        // fall through to debug
-      }
-    }
-
-    return res.status(502).json({
-      ok: false,
-      error: "Upstream did not return JSON",
-      upstreamStatus: nbaResp.status,
-      contentType: nbaResp.headers["content-type"] ?? null,
-      primeStatus: prime.status,
-      locationFinal,
-      dateFromFinal,
-      dateToFinal,
-      snippet,
+    if (out.ok) return res.status(out.status).json(out.json);
+    return res.status(out.status ?? 502).json(out);
+  } catch (err) {
+    setCors(res);
+    return res.status(500).json({
+      error: "NBA request failed",
+      details: err?.message ?? String(err),
+      code: err?.code ?? null,
     });
+  }
+});
+
+/**
+ * ✅ NEW: /nba/teamdashboard
+ *
+ * Calls: https://stats.nba.com/stats/teamdashboardbygeneralsplits
+ *
+ * Required:
+ * - teamId (NBA TEAM_ID)
+ *
+ * Optional:
+ * - season (default 2025-26)
+ * - seasonType (default Regular Season)
+ * - perMode (default Totals)
+ *
+ * This endpoint includes result sets such as "DaysRest" (we will parse in Edge Function).
+ */
+app.get("/nba/teamdashboard", async (req, res) => {
+  const season = req.query.season ?? "2025-26";
+  const seasonType = req.query.seasonType ?? "Regular Season";
+  const perMode = req.query.perMode ?? "Totals";
+
+  const teamIdRaw = String(req.query.teamId ?? req.query.TeamID ?? "").trim();
+  const teamIdNum = Number(teamIdRaw);
+
+  if (!Number.isFinite(teamIdNum) || teamIdNum <= 0) {
+    setCors(res);
+    return res.status(400).json({
+      ok: false,
+      error: "Missing or invalid teamId (NBA TEAM_ID). Example: /nba/teamdashboard?teamId=1610612737",
+    });
+  }
+
+  const nbaUrl = new URL("https://stats.nba.com/stats/teamdashboardbygeneralsplits");
+
+  nbaUrl.searchParams.set("Season", season);
+  nbaUrl.searchParams.set("SeasonType", seasonType);
+  nbaUrl.searchParams.set("LeagueID", "00");
+  nbaUrl.searchParams.set("PerMode", perMode);
+
+  // Required by this endpoint
+  nbaUrl.searchParams.set("TeamID", String(teamIdNum));
+
+  // Common params NBA expects (safe defaults)
+  nbaUrl.searchParams.set("MeasureType", "Base");
+  nbaUrl.searchParams.set("PlusMinus", "N");
+  nbaUrl.searchParams.set("PaceAdjust", "N");
+  nbaUrl.searchParams.set("Rank", "N");
+
+  nbaUrl.searchParams.set("PORound", "0");
+  nbaUrl.searchParams.set("Outcome", "");
+  nbaUrl.searchParams.set("Location", "");
+  nbaUrl.searchParams.set("Month", "0");
+  nbaUrl.searchParams.set("SeasonSegment", "");
+  nbaUrl.searchParams.set("DateFrom", "");
+  nbaUrl.searchParams.set("DateTo", "");
+  nbaUrl.searchParams.set("OpponentTeamID", "0");
+  nbaUrl.searchParams.set("VsConference", "");
+  nbaUrl.searchParams.set("VsDivision", "");
+  nbaUrl.searchParams.set("GameSegment", "");
+  nbaUrl.searchParams.set("Period", "0");
+  nbaUrl.searchParams.set("LastNGames", "0");
+
+  console.log("[/nba/teamdashboard]", {
+    season,
+    seasonType,
+    perMode,
+    teamId: teamIdNum,
+    url: nbaUrl.toString(),
+  });
+
+  try {
+    const out = await fetchNbaJson(nbaUrl.toString());
+    setCors(res);
+    if (out.ok) return res.status(out.status).json(out.json);
+    return res.status(out.status ?? 502).json(out);
   } catch (err) {
     setCors(res);
     return res.status(500).json({
