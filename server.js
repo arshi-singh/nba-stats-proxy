@@ -333,15 +333,20 @@ app.get("/nba/teamstats", async (req, res) => {
  * - season (default 2025-26)
  * - seasonType (default Regular Season)
  * - perMode (default Totals)
- * - measureType (default Base)  ✅ NEW
- * - plusMinus (default N)       ✅ NEW
+ * - measureType (default Base)
+ * - plusMinus (default N)
+ *
+ * ✅ NEW passthrough for splits:
+ * - Location: Home | Road
+ * - SeasonSegment: Pre All-Star | Post All-Star
+ * - DateFrom/DateTo: ISO or MM/DD/YYYY
  */
 app.get("/nba/teamdashboard", async (req, res) => {
   const season = req.query.season ?? "2025-26";
   const seasonType = req.query.seasonType ?? "Regular Season";
   const perMode = req.query.perMode ?? "Totals";
 
-  // ✅ NEW: passthrough measureType + plusMinus
+  // ✅ measureType + plusMinus
   const measureTypeRaw = String(req.query.measureType ?? "Base").trim();
   const allowedMeasureTypes = new Set(["Base", "Advanced", "Four Factors", "Misc"]);
   const measureType = allowedMeasureTypes.has(measureTypeRaw) ? measureTypeRaw : "Base";
@@ -349,6 +354,7 @@ app.get("/nba/teamdashboard", async (req, res) => {
   const plusMinusRaw = String(req.query.plusMinus ?? "N").trim().toUpperCase();
   const plusMinus = plusMinusRaw === "Y" ? "Y" : "N";
 
+  // ✅ teamId required
   const teamIdRaw = String(req.query.teamId ?? req.query.TeamID ?? "").trim();
   const teamIdNum = Number(teamIdRaw);
 
@@ -360,6 +366,25 @@ app.get("/nba/teamdashboard", async (req, res) => {
     });
   }
 
+  // ✅ NEW: Location passthrough (NBA expects Home/Road)
+  const rawLocation = String(req.query.Location ?? req.query.location ?? "").trim();
+  const locationNorm = rawLocation
+    ? rawLocation.charAt(0).toUpperCase() + rawLocation.slice(1).toLowerCase()
+    : "";
+  const allowedLocations = new Set(["", "Home", "Road", "Neutral"]);
+  const locationFinal = allowedLocations.has(locationNorm) ? locationNorm : "";
+
+  // ✅ NEW: SeasonSegment passthrough (NBA expects exact strings)
+  const rawSeasonSegment = String(req.query.SeasonSegment ?? req.query.seasonSegment ?? "").trim();
+  const allowedSeasonSegments = new Set(["", "Pre All-Star", "Post All-Star"]);
+  const seasonSegmentFinal = allowedSeasonSegments.has(rawSeasonSegment) ? rawSeasonSegment : "";
+
+  // ✅ Optional: DateFrom/DateTo passthrough (reuse existing helpers)
+  const rawDateFrom = pickQuery(req, "DateFrom", "dateFrom");
+  const rawDateTo = pickQuery(req, "DateTo", "dateTo");
+  const dateFromFinal = isoToNbaDate(rawDateFrom);
+  const dateToFinal = isoToNbaDate(rawDateTo);
+
   const nbaUrl = new URL("https://stats.nba.com/stats/teamdashboardbygeneralsplits");
 
   nbaUrl.searchParams.set("Season", season);
@@ -369,7 +394,6 @@ app.get("/nba/teamdashboard", async (req, res) => {
 
   nbaUrl.searchParams.set("TeamID", String(teamIdNum));
 
-  // ✅ NOW passthrough
   nbaUrl.searchParams.set("MeasureType", measureType);
   nbaUrl.searchParams.set("PlusMinus", plusMinus);
 
@@ -378,11 +402,17 @@ app.get("/nba/teamdashboard", async (req, res) => {
 
   nbaUrl.searchParams.set("PORound", "0");
   nbaUrl.searchParams.set("Outcome", "");
-  nbaUrl.searchParams.set("Location", "");
   nbaUrl.searchParams.set("Month", "0");
-  nbaUrl.searchParams.set("SeasonSegment", "");
-  nbaUrl.searchParams.set("DateFrom", "");
-  nbaUrl.searchParams.set("DateTo", "");
+
+  // ✅ NOW passthrough splits
+  nbaUrl.searchParams.set("Location", locationFinal);
+  nbaUrl.searchParams.set("SeasonSegment", seasonSegmentFinal);
+
+  // ✅ Optional passthrough dates
+  nbaUrl.searchParams.set("DateFrom", dateFromFinal);
+  nbaUrl.searchParams.set("DateTo", dateToFinal);
+
+  // leave others default/empty
   nbaUrl.searchParams.set("OpponentTeamID", "0");
   nbaUrl.searchParams.set("VsConference", "");
   nbaUrl.searchParams.set("VsDivision", "");
@@ -397,6 +427,12 @@ app.get("/nba/teamdashboard", async (req, res) => {
     teamId: teamIdNum,
     measureType,
     plusMinus,
+    locationFinal,
+    seasonSegmentFinal,
+    rawDateFrom,
+    rawDateTo,
+    dateFromFinal,
+    dateToFinal,
     url: nbaUrl.toString(),
   });
 
