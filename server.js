@@ -382,6 +382,61 @@ app.get("/nba/teamstats", async (req, res) => {
   }
 });
 
+/** try to get opponent stats
+
+app.get("/nba/teamdashboardbyopponent", async (req, res) => {
+  try {
+    const params = {
+      DateFrom: "",
+      DateTo: "",
+      GameSegment: "",
+      ISTRound: "",
+      LastNGames: 0,
+      LeagueID: "00",
+      Location: "",
+      MeasureType: "Base",
+      Month: 0,
+      OpponentTeamID: 0,
+      Outcome: "",
+      PORound: 0,
+      PaceAdjust: "N",
+      PerMode: "Totals",
+      Period: 0,
+      PlusMinus: "N",
+      Rank: "N",
+      Season: req.query.season || "2024-25",
+      SeasonType: req.query.seasonType || "Regular Season",
+      ShotClockRange: "",
+      Split: "opp",
+      TeamID: req.query.teamId || 1610612744,
+      VsConference: "",
+      VsDivision: "",
+    };
+
+    const response = await axios.get(
+      "https://stats.nba.com/stats/teamdashboardbyopponent",
+      {
+        params,
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          Referer: "https://www.nba.com/",
+          Origin: "https://www.nba.com",
+        },
+        httpsAgent,
+        timeout: 90000,
+      }
+    );
+
+    res.json(response.data);
+  } catch (err) {
+    res.status(500).json({
+      error: "Opponent endpoint failed",
+      details: err.message,
+    });
+  }
+});
+
+
 /**
  * ✅ UPDATED: /nba/teamdashboard
  *
