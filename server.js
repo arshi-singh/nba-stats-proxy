@@ -24,77 +24,31 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "nba-stats-proxy" });
 });
 
-app.get("/nba/teamdashboardbyopponent", async (req, res) => {
+app.get("/apisports/game-stats", async (req, res) => {
   setCors(res);
 
-  const season = String(req.query.season || "2024-25");
-  const seasonType = String(req.query.seasonType || "Regular Season");
-  const perMode = String(req.query.perMode || "Totals");
-  const teamId = String(req.query.teamId || "1610612744");
-
-  // IMPORTANT: this is the upstream URL DevTools revealed
-  const upstreamUrl = "https://stats.nba.com/stats/teamdashboardbyopponent";
-
-  // Send the exact param names NBA expects (PascalCase)
-  const params = {
-    DateFrom: "",
-    DateTo: "",
-    GameSegment: "",
-    ISTRound: "",
-    LastNGames: 0,
-    LeagueID: "00",
-    Location: "",
-    MeasureType: "Base",
-    Month: 0,
-    OpponentTeamID: 0,
-    Outcome: "",
-    PORound: 0,
-    PaceAdjust: "N",
-    PerMode: perMode,
-    Period: 0,
-    PlusMinus: "N",
-    Rank: "N",
-    Season: season,
-    SeasonType: seasonType,
-    ShotClockRange: "",
-    Split: "opp",
-    TeamID: teamId,
-    VsConference: "",
-    VsDivision: "",
-  };
+  const gameId = String(req.query.gameId || "");
+  if (!gameId) return res.status(400).json({ ok: false, error: "Missing gameId" });
 
   try {
-    const response = await axios.get(upstreamUrl, {
-      params,
+    const r = await axios.get("https://v2.nba.api-sports.io/games/statistics", {
+      params: { id: gameId },
       headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://www.nba.com/",
-        "Origin": "https://www.nba.com",
-        // These two often help NBA stats behave:
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
+        "x-apisports-key": process.env.NBA_API_KEY,
+        "x-apisports-host": "v2.nba.api-sports.io",
       },
-      httpsAgent,
-      timeout: 90000,
-      // Helps avoid gzip edge weirdness sometimes:
-      // decompress: true,
+      timeout: 30000,
     });
 
-    res.json({
-      ok: true,
-      upstream: upstreamUrl,
-      requested: { season, seasonType, perMode, teamId },
-      data: response.data,
-    });
+    res.json({ ok: true, gameId, data: r.data });
   } catch (err) {
     res.status(500).json({
       ok: false,
-      upstream: upstreamUrl,
-      requested: { season, seasonType, perMode, teamId },
-      error: "NBA request failed",
+      gameId,
+      error: "API-Sports request failed",
       details: err?.message,
-      code: err?.code,
       status: err?.response?.status,
+      upstream: err?.response?.data ?? null,
     });
   }
 });
