@@ -1,3 +1,4 @@
+Both have the same json result, proxy is broken, here is my proxy file, please make the changes/updates and send it back. Also check maybe the opponent measure type may already have the data we need. here is the proxy file:
 import express from "express";
 import axios from "axios";
 import https from "https";
@@ -147,34 +148,6 @@ function isoToNbaDate(v) {
 
   // Unknown format: pass through (NBA may ignore, but we don't break)
   return s;
-}
-
-/**
- * ✅ MeasureType normalization (fixes "Opponent" silently falling back to Base)
- *
- * Common accepted values include:
- * Base | Advanced | Misc | Four Factors | Scoring | Opponent | Usage | Defense :contentReference[oaicite:1]{index=1}
- */
-function normalizeMeasureType(raw) {
-  const v = String(raw ?? "").trim();
-  if (!v) return "Base";
-
-  const key = v.toLowerCase();
-
-  const map = new Map([
-    ["base", "Base"],
-    ["advanced", "Advanced"],
-    ["misc", "Misc"],
-    ["four factors", "Four Factors"],
-    ["fourfactors", "Four Factors"],
-    ["four_factors", "Four Factors"],
-    ["scoring", "Scoring"],
-    ["opponent", "Opponent"],
-    ["usage", "Usage"],
-    ["defense", "Defense"],
-  ]);
-
-  return map.get(key) ?? "Base";
 }
 
 /**
@@ -416,8 +389,22 @@ app.get("/nba/teamstats", async (req, res) => {
  * Calls: https://stats.nba.com/stats/teamdashboardbygeneralsplits
  *
  * ✅ CHANGES:
- * - FIXED: allow MeasureType=Opponent (and other common values)
  * - Uses longer timeout (90s) + retry once
+ *
+ * Required:
+ * - teamId (NBA TEAM_ID)
+ *
+ * Optional:
+ * - season (default 2025-26)
+ * - seasonType (default Regular Season)
+ * - perMode (default Totals)
+ * - measureType (default Base)
+ * - plusMinus (default N)
+ *
+ * ✅ passthrough for splits:
+ * - Location: Home | Road
+ * - SeasonSegment: Pre All-Star | Post All-Star
+ * - DateFrom/DateTo: ISO or MM/DD/YYYY
  */
 app.get("/nba/teamdashboard", async (req, res) => {
   const season = req.query.season ?? "2025-26";
@@ -426,7 +413,8 @@ app.get("/nba/teamdashboard", async (req, res) => {
 
   // ✅ measureType + plusMinus
   const measureTypeRaw = String(req.query.measureType ?? "Base").trim();
-  const measureType = normalizeMeasureType(measureTypeRaw);
+  const allowedMeasureTypes = new Set(["Base", "Advanced", "Four Factors", "Misc"]);
+  const measureType = allowedMeasureTypes.has(measureTypeRaw) ? measureTypeRaw : "Base";
 
   const plusMinusRaw = String(req.query.plusMinus ?? "N").trim().toUpperCase();
   const plusMinus = plusMinusRaw === "Y" ? "Y" : "N";
@@ -443,7 +431,7 @@ app.get("/nba/teamdashboard", async (req, res) => {
     });
   }
 
-  // ✅ Location passthrough (NBA expects Home/Road)
+  // ✅ NEW: Location passthrough (NBA expects Home/Road)
   const rawLocation = String(req.query.Location ?? req.query.location ?? "").trim();
   const locationNorm = rawLocation
     ? rawLocation.charAt(0).toUpperCase() + rawLocation.slice(1).toLowerCase()
@@ -451,12 +439,12 @@ app.get("/nba/teamdashboard", async (req, res) => {
   const allowedLocations = new Set(["", "Home", "Road", "Neutral"]);
   const locationFinal = allowedLocations.has(locationNorm) ? locationNorm : "";
 
-  // ✅ SeasonSegment passthrough (NBA expects exact strings)
+  // ✅ NEW: SeasonSegment passthrough (NBA expects exact strings)
   const rawSeasonSegment = String(req.query.SeasonSegment ?? req.query.seasonSegment ?? "").trim();
   const allowedSeasonSegments = new Set(["", "Pre All-Star", "Post All-Star"]);
   const seasonSegmentFinal = allowedSeasonSegments.has(rawSeasonSegment) ? rawSeasonSegment : "";
 
-  // ✅ Optional: DateFrom/DateTo passthrough
+  // ✅ Optional: DateFrom/DateTo passthrough (reuse existing helpers)
   const rawDateFrom = pickQuery(req, "DateFrom", "dateFrom");
   const rawDateTo = pickQuery(req, "DateTo", "dateTo");
   const dateFromFinal = isoToNbaDate(rawDateFrom);
@@ -502,8 +490,7 @@ app.get("/nba/teamdashboard", async (req, res) => {
     seasonType,
     perMode,
     teamId: teamIdNum,
-    measureType_requested: measureTypeRaw,
-    measureType_resolved: measureType,
+    measureType,
     plusMinus,
     locationFinal,
     seasonSegmentFinal,
