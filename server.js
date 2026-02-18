@@ -86,33 +86,37 @@ app.get("/apisports/game-stats-normalized", async (req, res) => {
     }
 
     const rows = items.map((it) => {
-      const s = it?.statistics?.[0] || {};
-      return {
-        game_id: String(gameId),
-        season: Number.isFinite(season) ? season : 2024,
-        team_id: Number(it?.team?.id),
+  const s = it?.statistics?.[0] || {};
 
-        min: parseMinutesToInt(s.min),
-        pts: s.points ?? null,
-        fgm: s.fgm ?? null,
-        fga: s.fga ?? null,
-        fg3m: s.tpm ?? null,
-        fg3a: s.tpa ?? null,
-        ftm: s.ftm ?? null,
-        fta: s.fta ?? null,
+  return {
+    game_id: String(gameId),
+    season: Number.isFinite(season) ? season : 2024,
 
-        oreb: s.offReb ?? null,
-        dreb: s.defReb ?? null,
-        reb: s.totReb ?? null,
+    // 🔥 ADD THESE TWO
+    api_team_id: Number(it?.team?.id),
+    team_code: String(it?.team?.code || "").trim(),
 
-        ast: s.assists ?? null,
-        tov: s.turnovers ?? null,
-        stl: s.steals ?? null,
-        blk: s.blocks ?? null,
-        pf: s.pFouls ?? null,
-        plus_minus: s.plusMinus != null ? Number(String(s.plusMinus)) : null,
-      };
-    });
+    min: parseMinutesToInt(s.min),
+    pts: s.points ?? null,
+    fgm: s.fgm ?? null,
+    fga: s.fga ?? null,
+    fg3m: s.tpm ?? null,
+    fg3a: s.tpa ?? null,
+    ftm: s.ftm ?? null,
+    fta: s.fta ?? null,
+
+    oreb: s.offReb ?? null,
+    dreb: s.defReb ?? null,
+    reb: s.totReb ?? null,
+
+    ast: s.assists ?? null,
+    tov: s.turnovers ?? null,
+    stl: s.steals ?? null,
+    blk: s.blocks ?? null,
+    pf: s.pFouls ?? null,
+    plus_minus: s.plusMinus != null ? Number(String(s.plusMinus)) : null,
+  };
+});
 
     res.json({ ok: true, gameId, rows });
   } catch (err) {
