@@ -150,6 +150,34 @@ function isoToNbaDate(v) {
 }
 
 /**
+ * ✅ MeasureType normalization (fixes "Opponent" silently falling back to Base)
+ *
+ * Common accepted values include:
+ * Base | Advanced | Misc | Four Factors | Scoring | Opponent | Usage | Defense :contentReference[oaicite:1]{index=1}
+ */
+function normalizeMeasureType(raw) {
+  const v = String(raw ?? "").trim();
+  if (!v) return "Base";
+
+  const key = v.toLowerCase();
+
+  const map = new Map([
+    ["base", "Base"],
+    ["advanced", "Advanced"],
+    ["misc", "Misc"],
+    ["four factors", "Four Factors"],
+    ["fourfactors", "Four Factors"],
+    ["four_factors", "Four Factors"],
+    ["scoring", "Scoring"],
+    ["opponent", "Opponent"],
+    ["usage", "Usage"],
+    ["defense", "Defense"],
+  ]);
+
+  return map.get(key) ?? "Base";
+}
+
+/**
  * Shared: prime cookies + fetch NBA JSON
  *
  * ✅ CHANGES:
@@ -388,22 +416,8 @@ app.get("/nba/teamstats", async (req, res) => {
  * Calls: https://stats.nba.com/stats/teamdashboardbygeneralsplits
  *
  * ✅ CHANGES:
+ * - FIXED: allow MeasureType=Opponent (and other common values)
  * - Uses longer timeout (90s) + retry once
- *
- * Required:
- * - teamId (NBA TEAM_ID)
- *
- * Optional:
- * - season (default 2025-26)
- * - seasonType (default Regular Season)
- * - perMode (default Totals)
- * - measureType (default Base)
- * - plusMinus (default N)
- *
- * ✅ passthrough for splits:
- * - Location: Home | Road
- * - SeasonSegment: Pre All-Star | Post All-Star
- * - DateFrom/DateTo: ISO or MM/DD/YYYY
  */
 app.get("/nba/teamdashboard", async (req, res) => {
   const season = req.query.season ?? "2025-26";
@@ -412,8 +426,7 @@ app.get("/nba/teamdashboard", async (req, res) => {
 
   // ✅ measureType + plusMinus
   const measureTypeRaw = String(req.query.measureType ?? "Base").trim();
-  const allowedMeasureTypes = new Set(["Base", "Advanced", "Four Factors", "Misc"]);
-  const measureType = allowedMeasureTypes.has(measureTypeRaw) ? measureTypeRaw : "Base";
+  const measureType = normalizeMeasureType(measureTypeRaw);
 
   const plusMinusRaw = String(req.query.plusMinus ?? "N").trim().toUpperCase();
   const plusMinus = plusMinusRaw === "Y" ? "Y" : "N";
@@ -430,7 +443,7 @@ app.get("/nba/teamdashboard", async (req, res) => {
     });
   }
 
-  // ✅ NEW: Location passthrough (NBA expects Home/Road)
+  // ✅ Location passthrough (NBA expects Home/Road)
   const rawLocation = String(req.query.Location ?? req.query.location ?? "").trim();
   const locationNorm = rawLocation
     ? rawLocation.charAt(0).toUpperCase() + rawLocation.slice(1).toLowerCase()
@@ -438,12 +451,12 @@ app.get("/nba/teamdashboard", async (req, res) => {
   const allowedLocations = new Set(["", "Home", "Road", "Neutral"]);
   const locationFinal = allowedLocations.has(locationNorm) ? locationNorm : "";
 
-  // ✅ NEW: SeasonSegment passthrough (NBA expects exact strings)
+  // ✅ SeasonSegment passthrough (NBA expects exact strings)
   const rawSeasonSegment = String(req.query.SeasonSegment ?? req.query.seasonSegment ?? "").trim();
   const allowedSeasonSegments = new Set(["", "Pre All-Star", "Post All-Star"]);
   const seasonSegmentFinal = allowedSeasonSegments.has(rawSeasonSegment) ? rawSeasonSegment : "";
 
-  // ✅ Optional: DateFrom/DateTo passthrough (reuse existing helpers)
+  // ✅ Optional: DateFrom/DateTo passthrough
   const rawDateFrom = pickQuery(req, "DateFrom", "dateFrom");
   const rawDateTo = pickQuery(req, "DateTo", "dateTo");
   const dateFromFinal = isoToNbaDate(rawDateFrom);
@@ -489,7 +502,8 @@ app.get("/nba/teamdashboard", async (req, res) => {
     seasonType,
     perMode,
     teamId: teamIdNum,
-    measureType,
+    measureType_requested: measureTypeRaw,
+    measureType_resolved: measureType,
     plusMinus,
     locationFinal,
     seasonSegmentFinal,
