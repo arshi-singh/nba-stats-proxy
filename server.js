@@ -42,32 +42,32 @@ app.get("/debug/apikey", (_req, res) => {
  * - supporting both header styles (api-sports + rapidapi)
  * - returning a clearer error if NBA_API_KEY is not set
  */
-app.get("/apisports/game-stats", async (req, res) => {
+function parseMinutesToInt(minStr) {
+  // "240:00" -> 240
+  if (!minStr) return null;
+  const m = String(minStr).match(/^(\d+)/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+app.get("/apisports/game-stats-normalized", async (req, res) => {
   setCors(res);
 
   const gameId = String(req.query.gameId || "").trim();
-  if (!gameId) return res.status(400).json({ ok: false, error: "Missing gameId" });
+  const season = Number(req.query.season || 2024);
 
-  const apiKey = process.env.NBA_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({
-      ok: false,
-      error: "Server misconfigured: NBA_API_KEY is missing in Railway environment variables.",
-      hint: "Railway → Service → Variables → add NBA_API_KEY",
-    });
+  if (!gameId) return res.status(400).json({ ok: false, error: "Missing gameId" });
+  if (!process.env.NBA_API_KEY) {
+    return res.status(500).json({ ok: false, error: "NBA_API_KEY missing in Railway env vars" });
   }
 
   try {
     const r = await axios.get("https://v2.nba.api-sports.io/games/statistics", {
       params: { id: gameId },
       headers: {
-        // API-Sports style
-        "x-apisports-key": apiKey,
+        "x-apisports-key": process.env.NBA_API_KEY,
         "x-apisports-host": "v2.nba.api-sports.io",
-        // Some plans/products use RapidAPI style
-        "x-rapidapi-key": apiKey,
+        "x-rapidapi-key": process.env.NBA_API_KEY,
         "x-rapidapi-host": "v2.nba.api-sports.io",
-
         "Accept": "application/json, text/plain, */*",
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -76,27 +76,52 @@ app.get("/apisports/game-stats", async (req, res) => {
       validateStatus: () => true,
     });
 
-    // If API-Sports returns an error payload, preserve it (helps debug)
     if (r.status >= 400) {
-      return res.status(r.status).json({
-        ok: false,
-        gameId,
-        error: "API-Sports request failed",
-        status: r.status,
-        upstream: r.data ?? null,
-      });
+      return res.status(r.status).json({ ok: false, gameId, error: "API-Sports failed", upstream: r.data });
     }
 
-    res.json({ ok: true, gameId, data: r.data });
+    const items = r.data?.response;
+    if (!Array.isArray(items) || items.length < 2) {
+      return res.status(500).json({ ok: false, gameId, error: "Unexpected API-Sports response shape", upstream: r.data });
+    }
+
+    const rows = items.map((it) => {
+      const s = it?.statistics?.[0] || {};
+      return {
+        game_id: String(gameId),
+        season: Number.isFinite(season) ? season : 2024,
+        team_id: Number(it?.team?.id),
+
+        min: parseMinutesToInt(s.min),
+        pts: s.points ?? null,
+        fgm: s.fgm ?? null,
+        fga: s.fga ?? null,
+        fg3m: s.tpm ?? null,
+        fg3a: s.tpa ?? null,
+        ftm: s.ftm ?? null,
+        fta: s.fta ?? null,
+
+        oreb: s.offReb ?? null,
+        dreb: s.defReb ?? null,
+        reb: s.totReb ?? null,
+
+        ast: s.assists ?? null,
+        tov: s.turnovers ?? null,
+        stl: s.steals ?? null,
+        blk: s.blocks ?? null,
+        pf: s.pFouls ?? null,
+        plus_minus: s.plusMinus != null ? Number(String(s.plusMinus)) : null,
+      };
+    });
+
+    res.json({ ok: true, gameId, rows });
   } catch (err) {
     res.status(500).json({
       ok: false,
       gameId,
       error: "API-Sports request failed",
-      details: err?.message,
+      details: err?.message ?? String(err),
       code: err?.code ?? null,
-      status: err?.response?.status,
-      upstream: err?.response?.data ?? null,
     });
   }
 });
