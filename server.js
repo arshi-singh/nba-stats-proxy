@@ -24,21 +24,68 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "nba-stats-proxy" });
 });
 
+/**
+ * ✅ NEW: Verify Railway env var is present (no key leakage)
+ */
+app.get("/debug/apikey", (_req, res) => {
+  setCors(res);
+  res.json({
+    ok: true,
+    hasKey: !!process.env.NBA_API_KEY,
+    keyLength: process.env.NBA_API_KEY?.length ?? 0,
+  });
+});
+
+/**
+ * ✅ UPDATED: API-Sports game statistics probe
+ * Fixes 403 "Missing application key" by:
+ * - supporting both header styles (api-sports + rapidapi)
+ * - returning a clearer error if NBA_API_KEY is not set
+ */
 app.get("/apisports/game-stats", async (req, res) => {
   setCors(res);
 
-  const gameId = String(req.query.gameId || "");
+  const gameId = String(req.query.gameId || "").trim();
   if (!gameId) return res.status(400).json({ ok: false, error: "Missing gameId" });
+
+  const apiKey = process.env.NBA_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({
+      ok: false,
+      error: "Server misconfigured: NBA_API_KEY is missing in Railway environment variables.",
+      hint: "Railway → Service → Variables → add NBA_API_KEY",
+    });
+  }
 
   try {
     const r = await axios.get("https://v2.nba.api-sports.io/games/statistics", {
       params: { id: gameId },
       headers: {
-        "x-apisports-key": process.env.NBA_API_KEY,
+        // API-Sports style
+        "x-apisports-key": apiKey,
         "x-apisports-host": "v2.nba.api-sports.io",
+        // Some plans/products use RapidAPI style
+        "x-rapidapi-key": apiKey,
+        "x-rapidapi-host": "v2.nba.api-sports.io",
+
+        "Accept": "application/json, text/plain, */*",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       },
       timeout: 30000,
+      validateStatus: () => true,
     });
+
+    // If API-Sports returns an error payload, preserve it (helps debug)
+    if (r.status >= 400) {
+      return res.status(r.status).json({
+        ok: false,
+        gameId,
+        error: "API-Sports request failed",
+        status: r.status,
+        upstream: r.data ?? null,
+      });
+    }
 
     res.json({ ok: true, gameId, data: r.data });
   } catch (err) {
@@ -47,12 +94,12 @@ app.get("/apisports/game-stats", async (req, res) => {
       gameId,
       error: "API-Sports request failed",
       details: err?.message,
+      code: err?.code ?? null,
       status: err?.response?.status,
       upstream: err?.response?.data ?? null,
     });
   }
 });
-
 
 app.get("/probe", async (_req, res) => {
   const targets = [
@@ -412,61 +459,6 @@ app.get("/nba/teamstats", async (req, res) => {
   }
 });
 
-/** try to get opponent stats
-
-app.get("/nba/teamdashboardbyopponent", async (req, res) => {
-  try {
-    const params = {
-      DateFrom: "",
-      DateTo: "",
-      GameSegment: "",
-      ISTRound: "",
-      LastNGames: 0,
-      LeagueID: "00",
-      Location: "",
-      MeasureType: "Base",
-      Month: 0,
-      OpponentTeamID: 0,
-      Outcome: "",
-      PORound: 0,
-      PaceAdjust: "N",
-      PerMode: "Totals",
-      Period: 0,
-      PlusMinus: "N",
-      Rank: "N",
-      Season: req.query.season || "2024-25",
-      SeasonType: req.query.seasonType || "Regular Season",
-      ShotClockRange: "",
-      Split: "opp",
-      TeamID: req.query.teamId || 1610612744,
-      VsConference: "",
-      VsDivision: "",
-    };
-
-    const response = await axios.get(
-      "https://stats.nba.com/stats/teamdashboardbyopponent",
-      {
-        params,
-        headers: {
-          "User-Agent": "Mozilla/5.0",
-          Referer: "https://www.nba.com/",
-          Origin: "https://www.nba.com",
-        },
-        httpsAgent,
-        timeout: 90000,
-      }
-    );
-
-    res.json(response.data);
-  } catch (err) {
-    res.status(500).json({
-      error: "Opponent endpoint failed",
-      details: err.message,
-    });
-  }
-});
-
-
 /**
  * ✅ UPDATED: /nba/teamdashboard
  *
@@ -515,7 +507,7 @@ app.get("/nba/teamdashboard", async (req, res) => {
     });
   }
 
-  // ✅ NEW: Location passthrough (NBA expects Home/Road)
+  // ✅ Location passthrough (NBA expects Home/Road)
   const rawLocation = String(req.query.Location ?? req.query.location ?? "").trim();
   const locationNorm = rawLocation
     ? rawLocation.charAt(0).toUpperCase() + rawLocation.slice(1).toLowerCase()
@@ -523,7 +515,7 @@ app.get("/nba/teamdashboard", async (req, res) => {
   const allowedLocations = new Set(["", "Home", "Road", "Neutral"]);
   const locationFinal = allowedLocations.has(locationNorm) ? locationNorm : "";
 
-  // ✅ NEW: SeasonSegment passthrough (NBA expects exact strings)
+  // ✅ SeasonSegment passthrough (NBA expects exact strings)
   const rawSeasonSegment = String(req.query.SeasonSegment ?? req.query.seasonSegment ?? "").trim();
   const allowedSeasonSegments = new Set(["", "Pre All-Star", "Post All-Star"]);
   const seasonSegmentFinal = allowedSeasonSegments.has(rawSeasonSegment) ? rawSeasonSegment : "";
