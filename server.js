@@ -1,4 +1,3 @@
-Both have the same json result, proxy is broken, here is my proxy file, please make the changes/updates and send it back. Also check maybe the opponent measure type may already have the data we need. here is the proxy file:
 import express from "express";
 import axios from "axios";
 import https from "https";
