@@ -614,7 +614,7 @@ app.get("/nba/teamdashboard", async (req, res) => {
   const perMode = req.query.perMode ?? "Totals";
 
   const measureTypeRaw = String(req.query.measureType ?? "Base").trim();
-  const allowedMeasureTypes = new Set(["Base", "Advanced", "Four Factors", "Misc"]);
+  const allowedMeasureTypes = new Set(["Base", "Advanced", "Four Factors", "Misc","Opponent",]);
   const measureType = allowedMeasureTypes.has(measureTypeRaw) ? measureTypeRaw : "Base";
 
   const plusMinusRaw = String(req.query.plusMinus ?? "N").trim().toUpperCase();
