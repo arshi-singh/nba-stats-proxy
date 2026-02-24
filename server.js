@@ -645,6 +645,9 @@ app.get("/nba/teamdashboard", async (req, res) => {
   const dateFromFinal = isoToNbaDate(rawDateFrom);
   const dateToFinal = isoToNbaDate(rawDateTo);
 
+    // ✅ timeout tuning: Opponent is often slower
+  const timeoutMs = measureType === "Opponent" ? 30000 : 20000;
+
   const nbaUrl = new URL("https://stats.nba.com/stats/teamdashboardbygeneralsplits");
 
   nbaUrl.searchParams.set("Season", season);
