@@ -40,8 +40,6 @@ const NBA_HEADERS = {
 
 /**
  * ✅ Global NBA request limiter (1-at-a-time)
- * This prevents overlapping upstream calls from multiple clients/debug runs
- * which often causes stalls/timeouts.
  */
 let nbaQueue = Promise.resolve();
 function enqueueNba(fn) {
@@ -52,8 +50,6 @@ function enqueueNba(fn) {
 
 /**
  * ✅ Simple in-memory cache (best-effort)
- * - cache OK responses only
- * - keyed by full NBA URL
  */
 const nbaCache = new Map(); // key -> { expiresAtMs, payload, statusCode }
 function cacheGet(key) {
@@ -84,9 +80,6 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "nba-stats-proxy" });
 });
 
-/**
- * ✅ NEW: Verify Railway env var is present (no key leakage)
- */
 app.get("/debug/apikey", (_req, res) => {
   setCors(res);
   res.json({
@@ -100,7 +93,6 @@ app.get("/debug/apikey", (_req, res) => {
  * ✅ UPDATED: API-Sports game statistics probe
  */
 function parseMinutesToInt(minStr) {
-  // "240:00" -> 240
   if (!minStr) return null;
   const m = String(minStr).match(/^(\d+)/);
   return m ? parseInt(m[1], 10) : null;
@@ -126,8 +118,7 @@ app.get("/apisports/game-stats-normalized", async (req, res) => {
         "x-rapidapi-key": process.env.NBA_API_KEY,
         "x-rapidapi-host": "v2.nba.api-sports.io",
         Accept: "application/json, text/plain, */*",
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": NBA_HEADERS["User-Agent"],
       },
       timeout: 30000,
       validateStatus: () => true,
@@ -144,14 +135,11 @@ app.get("/apisports/game-stats-normalized", async (req, res) => {
 
     const rows = items.map((it) => {
       const s = it?.statistics?.[0] || {};
-
       return {
         game_id: String(gameId),
         season: Number.isFinite(season) ? season : 2024,
-
         api_team_id: Number(it?.team?.id),
         team_code: String(it?.team?.code || "").trim(),
-
         min: parseMinutesToInt(s.min),
         pts: s.points ?? null,
         fgm: s.fgm ?? null,
@@ -160,11 +148,9 @@ app.get("/apisports/game-stats-normalized", async (req, res) => {
         fg3a: s.tpa ?? null,
         ftm: s.ftm ?? null,
         fta: s.fta ?? null,
-
         oreb: s.offReb ?? null,
         dreb: s.defReb ?? null,
         reb: s.totReb ?? null,
-
         ast: s.assists ?? null,
         tov: s.turnovers ?? null,
         stl: s.steals ?? null,
@@ -202,8 +188,7 @@ app.get("/probe", async (_req, res) => {
         timeout: 15000,
         decompress: true,
         headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "User-Agent": NBA_HEADERS["User-Agent"],
           Accept: "text/html,application/json;q=0.9,*/*;q=0.8",
         },
         validateStatus: () => true,
@@ -237,16 +222,12 @@ app.get("/probe-nba", async (_req, res) => {
       httpsAgent,
       timeout: 20000,
       decompress: true,
-      headers: {
-        ...NBA_HEADERS,
-        // probe endpoint is fine with default referer
-      },
+      headers: { ...NBA_HEADERS },
       validateStatus: () => true,
     });
 
     setCors(res);
 
-    // best-effort parsing (stats.nba.com usually returns JSON here)
     const data = r.data;
     const firstHeaders =
       data?.resultSets?.[0]?.headers?.slice?.(0, 12) ?? data?.resultSet?.headers?.slice?.(0, 12) ?? null;
@@ -269,8 +250,7 @@ app.get("/probe-nba", async (_req, res) => {
 });
 
 /**
- * Helpers for DateFrom/DateTo pass-through
- * NBA stats expects MM/DD/YYYY in DateFrom/DateTo.
+ * Helpers for DateFrom/DateTo
  */
 function pickQuery(req, ...keys) {
   for (const k of keys) {
@@ -283,37 +263,25 @@ function pickQuery(req, ...keys) {
 function isoToNbaDate(v) {
   if (!v) return "";
   const s = String(v).trim();
-
-  // Already MM/DD/YYYY
   if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
-
-  // Convert YYYY-MM-DD -> MM/DD/YYYY
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (m) {
     const [, yyyy, mm, dd] = m;
     return `${mm}/${dd}/${yyyy}`;
   }
-
-  // Unknown format: pass through
   return s;
 }
 
 /**
  * ✅ Cookie cache (global)
  */
-let cookieCache = {
-  cookieHeader: "",
-  fetchedAtMs: 0,
-};
-const COOKIE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+let cookieCache = { cookieHeader: "", fetchedAtMs: 0 };
+const COOKIE_TTL_MS = 10 * 60 * 1000;
 
 async function primeCookiesCached(force = false) {
   const now = Date.now();
   const fresh = cookieCache.cookieHeader && now - cookieCache.fetchedAtMs < COOKIE_TTL_MS;
-
-  if (!force && fresh) {
-    return { primeStatus: 200, cookieHeader: cookieCache.cookieHeader, cached: true };
-  }
+  if (!force && fresh) return { primeStatus: 200, cookieHeader: cookieCache.cookieHeader, cached: true };
 
   const prime = await axios.get("https://www.nba.com", {
     httpsAgent,
@@ -329,11 +297,7 @@ async function primeCookiesCached(force = false) {
   const setCookies = prime.headers["set-cookie"] || [];
   const cookieHeader = Array.isArray(setCookies) ? setCookies.map((c) => c.split(";")[0]).join("; ") : "";
 
-  cookieCache = {
-    cookieHeader,
-    fetchedAtMs: Date.now(),
-  };
-
+  cookieCache = { cookieHeader, fetchedAtMs: Date.now() };
   return { primeStatus: prime.status, cookieHeader, cached: false };
 }
 
@@ -345,8 +309,6 @@ function isRetryableAxiosError(e) {
   const code = e?.code;
   const msg = String(e?.message ?? "").toLowerCase();
   const status = e?.response?.status;
-
-  // axios timeout code is often ECONNABORTED
   const timeoutish = code === "ECONNABORTED" || msg.includes("timeout");
 
   return (
@@ -360,13 +322,7 @@ function isRetryableAxiosError(e) {
 }
 
 /**
- * ✅ Shared: prime cookies + fetch NBA JSON (NOW: fail-fast + retries + optional cache)
- *
- * Key behavioral changes:
- * - Per-attempt timeout defaults to 15s (instead of stalling ~70s+)
- * - Retries with backoff for timeouts/429/5xx/non-JSON
- * - Optional cache for OK responses
- * - Global limiter ensures 1 upstream request at a time
+ * ✅ Shared: prime cookies + fetch NBA JSON
  */
 async function fetchNbaJson(
   url,
@@ -382,31 +338,25 @@ async function fetchNbaJson(
   const backoffMs = Array.isArray(opts.backoffMs) ? opts.backoffMs : [700, 1500, 3000];
   const cacheTtlMs = Number(opts.cacheTtlMs ?? 0);
 
-  // cache hit (OK responses only)
   if (cacheTtlMs > 0) {
     const hit = cacheGet(url);
-    if (hit) {
-      return { ok: true, status: hit.statusCode, json: hit.payload, cached: true };
-    }
+    if (hit) return { ok: true, status: hit.statusCode, json: hit.payload, cached: true };
   }
 
   return enqueueNba(async () => {
     let lastErrEnvelope = null;
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
-      const forcePrime = attempt > 1; // refresh cookies after first failure
+      const forcePrime = attempt > 1;
       try {
         const { primeStatus, cookieHeader } = await primeCookiesCached(forcePrime);
 
         const nbaResp = await axios.get(url, {
           httpsAgent,
-          timeout: timeoutMs, // ✅ cap per attempt
+          timeout: timeoutMs,
           decompress: true,
           responseType: "arraybuffer",
-          headers: {
-            ...NBA_HEADERS,
-            ...(cookieHeader ? { Cookie: cookieHeader } : {}),
-          },
+          headers: { ...NBA_HEADERS, ...(cookieHeader ? { Cookie: cookieHeader } : {}) },
           validateStatus: () => true,
         });
 
@@ -414,7 +364,8 @@ async function fetchNbaJson(
         const rawText = Buffer.from(nbaResp.data || []).toString("utf8");
         const snippet = rawText.slice(0, 500);
 
-        const looksJson = ct.includes("application/json") || snippet.trim().startsWith("{") || snippet.trim().startsWith("[");
+        const looksJson =
+          ct.includes("application/json") || snippet.trim().startsWith("{") || snippet.trim().startsWith("[");
         if (!looksJson) {
           lastErrEnvelope = {
             ok: false,
@@ -425,7 +376,6 @@ async function fetchNbaJson(
             contentType: nbaResp.headers["content-type"] ?? null,
             snippet,
           };
-          // retry this (transient HTML/empty responses happen)
           if (attempt < attempts) {
             await sleep(backoffMs[Math.min(attempt - 1, backoffMs.length - 1)] ?? 1000);
             continue;
@@ -436,7 +386,7 @@ async function fetchNbaJson(
         let json;
         try {
           json = JSON.parse(rawText);
-        } catch (e) {
+        } catch {
           lastErrEnvelope = {
             ok: false,
             status: 502,
@@ -453,7 +403,6 @@ async function fetchNbaJson(
           return lastErrEnvelope;
         }
 
-        // If NBA returns JSON but with a non-200 status, treat as error envelope (retry on 429/5xx)
         if (nbaResp.status !== 200) {
           lastErrEnvelope = {
             ok: false,
@@ -474,7 +423,6 @@ async function fetchNbaJson(
           return lastErrEnvelope;
         }
 
-        // ✅ OK
         if (cacheTtlMs > 0) cacheSet(url, json, 200, cacheTtlMs);
         return { ok: true, status: 200, json, primeStatus };
       } catch (e) {
@@ -495,21 +443,12 @@ async function fetchNbaJson(
       }
     }
 
-    // fallback
-    return (
-      lastErrEnvelope || {
-        ok: false,
-        status: 500,
-        error: "NBA request failed",
-        details: "Unknown error",
-        code: null,
-      }
-    );
+    return lastErrEnvelope || { ok: false, status: 500, error: "NBA request failed", details: "Unknown error", code: null };
   });
 }
 
 /**
- * ✅ /nba/teamstats (behavior preserved, but now benefits from limiter + retries)
+ * ✅ /nba/teamstats
  */
 app.get("/nba/teamstats", async (req, res) => {
   const season = req.query.season ?? "2025-26";
@@ -517,14 +456,12 @@ app.get("/nba/teamstats", async (req, res) => {
   const measureType = req.query.measureType ?? "Base";
   const perMode = req.query.perMode ?? "Totals";
 
-  // pass-through Location (or location)
   const rawLocation = String(req.query.Location ?? req.query.location ?? "").trim();
   const locationNorm = rawLocation ? rawLocation.charAt(0).toUpperCase() + rawLocation.slice(1).toLowerCase() : "";
 
   const allowedLocations = new Set(["", "Home", "Road", "Neutral"]);
   const locationFinal = allowedLocations.has(locationNorm) ? locationNorm : "";
 
-  // DateFrom/DateTo pass-through
   const rawDateFrom = pickQuery(req, "DateFrom", "dateFrom");
   const rawDateTo = pickQuery(req, "DateTo", "dateTo");
 
@@ -532,35 +469,27 @@ app.get("/nba/teamstats", async (req, res) => {
   const dateToFinal = isoToNbaDate(rawDateTo);
 
   const nbaUrl = new URL("https://stats.nba.com/stats/leaguedashteamstats");
-
   nbaUrl.searchParams.set("Season", season);
   nbaUrl.searchParams.set("SeasonType", seasonType);
   nbaUrl.searchParams.set("LeagueID", "00");
-
   nbaUrl.searchParams.set("PerMode", perMode);
   nbaUrl.searchParams.set("MeasureType", measureType);
-
   nbaUrl.searchParams.set("PlusMinus", "N");
   nbaUrl.searchParams.set("PaceAdjust", "N");
   nbaUrl.searchParams.set("Rank", "N");
-
   nbaUrl.searchParams.set("PORound", "0");
   nbaUrl.searchParams.set("Month", "0");
   nbaUrl.searchParams.set("OpponentTeamID", "0");
   nbaUrl.searchParams.set("TeamID", "0");
   nbaUrl.searchParams.set("Period", "0");
   nbaUrl.searchParams.set("LastNGames", "0");
-
   nbaUrl.searchParams.set("Conference", "");
   nbaUrl.searchParams.set("Division", "");
   nbaUrl.searchParams.set("Location", locationFinal);
-
   nbaUrl.searchParams.set("Outcome", "");
   nbaUrl.searchParams.set("SeasonSegment", "");
-
   nbaUrl.searchParams.set("DateFrom", dateFromFinal);
   nbaUrl.searchParams.set("DateTo", dateToFinal);
-
   nbaUrl.searchParams.set("GameSegment", "");
   nbaUrl.searchParams.set("ShotClockRange", "");
   nbaUrl.searchParams.set("GameScope", "");
@@ -571,42 +500,19 @@ app.get("/nba/teamstats", async (req, res) => {
   nbaUrl.searchParams.set("VsConference", "");
   nbaUrl.searchParams.set("VsDivision", "");
 
-  console.log("[/nba/teamstats]", {
-    season,
-    seasonType,
-    measureType,
-    perMode,
-    locationFinal,
-    rawDateFrom,
-    rawDateTo,
-    dateFromFinal,
-    dateToFinal,
-  });
-
   try {
-    // ✅ 15s per attempt, 3 attempts, no cache by default
     const out = await fetchNbaJson(nbaUrl.toString(), { timeoutMs: 15000, attempts: 3, cacheTtlMs: 0 });
     setCors(res);
     if (out.ok) return res.status(out.status).json(out.json);
     return res.status(out.status ?? 502).json(out);
   } catch (err) {
     setCors(res);
-    return res.status(500).json({
-      error: "NBA request failed",
-      details: err?.message ?? String(err),
-      code: err?.code ?? null,
-    });
+    return res.status(500).json({ error: "NBA request failed", details: err?.message ?? String(err), code: err?.code ?? null });
   }
 });
 
 /**
- * ✅ UPDATED: /nba/teamdashboard
- *
- * Major behavior change:
- * - no more ~71s stalls
- * - per-attempt timeout 15s (configurable)
- * - 3 attempts w/ backoff
- * - OK response cache 60s to reduce upstream hits during ingestion/debug
+ * ✅ /nba/teamdashboard
  */
 app.get("/nba/teamdashboard", async (req, res) => {
   const season = req.query.season ?? "2025-26";
@@ -614,7 +520,7 @@ app.get("/nba/teamdashboard", async (req, res) => {
   const perMode = req.query.perMode ?? "Totals";
 
   const measureTypeRaw = String(req.query.measureType ?? "Base").trim();
-  const allowedMeasureTypes = new Set(["Base", "Advanced", "Four Factors", "Misc","Opponent",]);
+  const allowedMeasureTypes = new Set(["Base", "Advanced", "Four Factors", "Misc", "Opponent"]);
   const measureType = allowedMeasureTypes.has(measureTypeRaw) ? measureTypeRaw : "Base";
 
   const plusMinusRaw = String(req.query.plusMinus ?? "N").trim().toUpperCase();
@@ -645,33 +551,28 @@ app.get("/nba/teamdashboard", async (req, res) => {
   const dateFromFinal = isoToNbaDate(rawDateFrom);
   const dateToFinal = isoToNbaDate(rawDateTo);
 
-    // ✅ timeout tuning: Opponent is often slower
+  // ✅ timeout tuning: Opponent is often slower
   const timeoutMs = measureType === "Opponent" ? 30000 : 20000;
+  // ✅ longer cache for Opponent (reduces upstream hits during ingestion)
+  const cacheTtlMs = measureType === "Opponent" ? 120_000 : 60_000;
 
   const nbaUrl = new URL("https://stats.nba.com/stats/teamdashboardbygeneralsplits");
-
   nbaUrl.searchParams.set("Season", season);
   nbaUrl.searchParams.set("SeasonType", seasonType);
   nbaUrl.searchParams.set("LeagueID", "00");
   nbaUrl.searchParams.set("PerMode", perMode);
-
   nbaUrl.searchParams.set("TeamID", String(teamIdNum));
   nbaUrl.searchParams.set("MeasureType", measureType);
   nbaUrl.searchParams.set("PlusMinus", plusMinus);
-
   nbaUrl.searchParams.set("PaceAdjust", "N");
   nbaUrl.searchParams.set("Rank", "N");
-
   nbaUrl.searchParams.set("PORound", "0");
   nbaUrl.searchParams.set("Outcome", "");
   nbaUrl.searchParams.set("Month", "0");
-
   nbaUrl.searchParams.set("Location", locationFinal);
   nbaUrl.searchParams.set("SeasonSegment", seasonSegmentFinal);
-
   nbaUrl.searchParams.set("DateFrom", dateFromFinal);
   nbaUrl.searchParams.set("DateTo", dateToFinal);
-
   nbaUrl.searchParams.set("OpponentTeamID", "0");
   nbaUrl.searchParams.set("VsConference", "");
   nbaUrl.searchParams.set("VsDivision", "");
@@ -685,23 +586,17 @@ app.get("/nba/teamdashboard", async (req, res) => {
     perMode,
     teamId: teamIdNum,
     measureType,
-    plusMinus,
-    locationFinal,
-    seasonSegmentFinal,
-    rawDateFrom,
-    rawDateTo,
-    dateFromFinal,
-    dateToFinal,
+    timeoutMs,
+    cacheTtlMs,
   });
 
   try {
-    // ✅ Fail-fast + retries + 60s cache for OK payloads
-    // If you want it even more conservative, bump timeoutMs to 20000.
+    // ✅ IMPORTANT: USE timeoutMs variable (not hardcoded 15000)
     const out = await fetchNbaJson(nbaUrl.toString(), {
-      timeoutMs: 15000,
+      timeoutMs,
       attempts: 3,
       backoffMs: [700, 1500, 3000],
-      cacheTtlMs: 60_000,
+      cacheTtlMs,
     });
 
     setCors(res);
@@ -710,6 +605,7 @@ app.get("/nba/teamdashboard", async (req, res) => {
   } catch (err) {
     setCors(res);
     return res.status(500).json({
+      ok: false,
       error: "NBA request failed",
       details: err?.message ?? String(err),
       code: err?.code ?? null,
