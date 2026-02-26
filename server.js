@@ -331,7 +331,7 @@ async function fetchNbaJson(
     attempts: 3,
     backoffMs: [700, 1500, 3000],
     cacheTtlMs: 0,
-  }
+  },
 ) {
   const timeoutMs = Number(opts.timeoutMs ?? 15000);
   const attempts = Number(opts.attempts ?? 3);
@@ -449,13 +449,6 @@ async function fetchNbaJson(
 
 /**
  * ✅ NEW helper: build LeagueDashTeamStats URL (supports both your old proxy params and Edge Function params)
- * - Accepts:
- *   - season OR Season
- *   - seasonType OR SeasonType
- *   - perMode OR PerMode
- *   - measureType OR MeasureType
- *   - teamId/teamID/TeamID (optional; defaults to 0)
- *   - plus any existing NBA params if you want to pass them through later
  */
 function buildLeagueDashTeamStatsUrl(req) {
   const season = req.query.season ?? req.query.Season ?? "2025-26";
@@ -463,8 +456,7 @@ function buildLeagueDashTeamStatsUrl(req) {
   const measureType = req.query.measureType ?? req.query.MeasureType ?? "Base";
   const perMode = req.query.perMode ?? req.query.PerMode ?? "Totals";
 
-  const rawTeamId =
-    req.query.teamId ?? req.query.teamID ?? req.query.TeamID ?? req.query.TeamId ?? "0";
+  const rawTeamId = req.query.teamId ?? req.query.teamID ?? req.query.TeamID ?? req.query.TeamId ?? "0";
   const teamIdNum = Number(String(rawTeamId).trim());
   const teamIdFinal = Number.isFinite(teamIdNum) && teamIdNum > 0 ? String(teamIdNum) : "0";
 
@@ -485,7 +477,6 @@ function buildLeagueDashTeamStatsUrl(req) {
   nbaUrl.searchParams.set("PerMode", String(perMode));
   nbaUrl.searchParams.set("MeasureType", String(measureType));
 
-  // defaults consistent with your existing /nba/teamstats route
   nbaUrl.searchParams.set("PlusMinus", String(req.query.PlusMinus ?? req.query.plusMinus ?? "N"));
   nbaUrl.searchParams.set("PaceAdjust", String(req.query.PaceAdjust ?? req.query.paceAdjust ?? "N"));
   nbaUrl.searchParams.set("Rank", String(req.query.Rank ?? req.query.rank ?? "N"));
@@ -520,6 +511,71 @@ function buildLeagueDashTeamStatsUrl(req) {
 }
 
 /**
+ * ✅ NEW helper: build TeamDashboardByGeneralSplits URL
+ * This is what your Edge Function needs for official split-level REB_PCT:
+ * https://stats.nba.com/stats/teamdashboardbygeneralsplits
+ */
+function buildTeamDashboardByGeneralSplitsUrl(req) {
+  const season = req.query.season ?? req.query.Season ?? "2025-26";
+  const seasonType = req.query.seasonType ?? req.query.SeasonType ?? "Regular Season";
+  const perMode = req.query.perMode ?? req.query.PerMode ?? "Totals";
+  const measureType = req.query.measureType ?? req.query.MeasureType ?? "Base";
+
+  const plusMinusRaw = String(req.query.plusMinus ?? req.query.PlusMinus ?? "N").trim().toUpperCase();
+  const plusMinus = plusMinusRaw === "Y" ? "Y" : "N";
+
+  const rawTeamId = req.query.teamId ?? req.query.teamID ?? req.query.TeamID ?? req.query.TeamId ?? "";
+  const teamIdNum = Number(String(rawTeamId).trim());
+
+  if (!Number.isFinite(teamIdNum) || teamIdNum <= 0) {
+    return { error: "Missing or invalid teamId (NBA TEAM_ID). Example: /nba/teamdashboardbygeneralsplits?teamId=1610612737" };
+  }
+
+  // optional filters (supported by endpoint)
+  const rawLocation = String(req.query.Location ?? req.query.location ?? "").trim();
+  const locationNorm = rawLocation ? rawLocation.charAt(0).toUpperCase() + rawLocation.slice(1).toLowerCase() : "";
+  const allowedLocations = new Set(["", "Home", "Road", "Neutral"]);
+  const locationFinal = allowedLocations.has(locationNorm) ? locationNorm : "";
+
+  const rawSeasonSegment = String(req.query.SeasonSegment ?? req.query.seasonSegment ?? "").trim();
+  const allowedSeasonSegments = new Set(["", "Pre All-Star", "Post All-Star"]);
+  const seasonSegmentFinal = allowedSeasonSegments.has(rawSeasonSegment) ? rawSeasonSegment : "";
+
+  const rawDateFrom = pickQuery(req, "DateFrom", "dateFrom");
+  const rawDateTo = pickQuery(req, "DateTo", "dateTo");
+  const dateFromFinal = isoToNbaDate(rawDateFrom);
+  const dateToFinal = isoToNbaDate(rawDateTo);
+
+  const nbaUrl = new URL("https://stats.nba.com/stats/teamdashboardbygeneralsplits");
+  nbaUrl.searchParams.set("Season", String(season));
+  nbaUrl.searchParams.set("SeasonType", String(seasonType));
+  nbaUrl.searchParams.set("LeagueID", "00");
+  nbaUrl.searchParams.set("PerMode", String(perMode));
+  nbaUrl.searchParams.set("TeamID", String(teamIdNum));
+  nbaUrl.searchParams.set("MeasureType", String(measureType));
+  nbaUrl.searchParams.set("PlusMinus", plusMinus);
+  nbaUrl.searchParams.set("PaceAdjust", String(req.query.PaceAdjust ?? req.query.paceAdjust ?? "N"));
+  nbaUrl.searchParams.set("Rank", String(req.query.Rank ?? req.query.rank ?? "N"));
+
+  nbaUrl.searchParams.set("PORound", String(req.query.PORound ?? "0"));
+  nbaUrl.searchParams.set("Outcome", String(req.query.Outcome ?? ""));
+  nbaUrl.searchParams.set("Month", String(req.query.Month ?? "0"));
+  nbaUrl.searchParams.set("Location", locationFinal);
+  nbaUrl.searchParams.set("SeasonSegment", seasonSegmentFinal);
+  nbaUrl.searchParams.set("DateFrom", dateFromFinal);
+  nbaUrl.searchParams.set("DateTo", dateToFinal);
+
+  nbaUrl.searchParams.set("OpponentTeamID", String(req.query.OpponentTeamID ?? "0"));
+  nbaUrl.searchParams.set("VsConference", String(req.query.VsConference ?? ""));
+  nbaUrl.searchParams.set("VsDivision", String(req.query.VsDivision ?? ""));
+  nbaUrl.searchParams.set("GameSegment", String(req.query.GameSegment ?? ""));
+  nbaUrl.searchParams.set("Period", String(req.query.Period ?? "0"));
+  nbaUrl.searchParams.set("LastNGames", String(req.query.LastNGames ?? "0"));
+
+  return { nbaUrl, teamIdNum, season, seasonType, perMode, measureType, plusMinus };
+}
+
+/**
  * ✅ /nba/teamstats  (existing route)
  * NOTE: this is basically LeagueDashTeamStats with TeamID=0 unless provided.
  */
@@ -543,9 +599,7 @@ app.get("/nba/teamstats", async (req, res) => {
 });
 
 /**
- * ✅ NEW: /nba/leaguedashteamstats  (THIS FIXES YOUR 404)
- * Your Edge Function was calling /nba/leaguedashteamstats and Railway had no route.
- * This route is an alias to the exact same upstream leaguedashteamstats endpoint.
+ * ✅ /nba/leaguedashteamstats
  */
 app.get("/nba/leaguedashteamstats", async (req, res) => {
   try {
@@ -570,72 +624,22 @@ app.get("/nba/leaguedashteamstats", async (req, res) => {
 
 /**
  * ✅ /nba/teamdashboard
+ * FIXED: this route should call the upstream teamdashboardbygeneralsplits with MeasureType support.
+ * (Kept to avoid breaking existing callers.)
  */
 app.get("/nba/teamdashboard", async (req, res) => {
-  const season = req.query.season ?? "2025-26";
-  const seasonType = req.query.seasonType ?? "Regular Season";
-  const perMode = req.query.perMode ?? "Totals";
-
-  const measureTypeRaw = String(req.query.measureType ?? "Base").trim();
-  const allowedMeasureTypes = new Set(["Base", "Advanced", "Four Factors", "Misc", "Opponent"]);
-  const measureType = allowedMeasureTypes.has(measureTypeRaw) ? measureTypeRaw : "Base";
-
-  const plusMinusRaw = String(req.query.plusMinus ?? "N").trim().toUpperCase();
-  const plusMinus = plusMinusRaw === "Y" ? "Y" : "N";
-
-  const teamIdRaw = String(req.query.teamId ?? req.query.TeamID ?? "").trim();
-  const teamIdNum = Number(teamIdRaw);
-
-  if (!Number.isFinite(teamIdNum) || teamIdNum <= 0) {
+  const built = buildTeamDashboardByGeneralSplitsUrl(req);
+  if (built.error) {
     setCors(res);
-    return res.status(400).json({
-      ok: false,
-      error: "Missing or invalid teamId (NBA TEAM_ID). Example: /nba/teamdashboard?teamId=1610612737",
-    });
+    return res.status(400).json({ ok: false, error: built.error });
   }
 
-  const rawLocation = String(req.query.Location ?? req.query.location ?? "").trim();
-  const locationNorm = rawLocation ? rawLocation.charAt(0).toUpperCase() + rawLocation.slice(1).toLowerCase() : "";
-  const allowedLocations = new Set(["", "Home", "Road", "Neutral"]);
-  const locationFinal = allowedLocations.has(locationNorm) ? locationNorm : "";
-
-  const rawSeasonSegment = String(req.query.SeasonSegment ?? req.query.seasonSegment ?? "").trim();
-  const allowedSeasonSegments = new Set(["", "Pre All-Star", "Post All-Star"]);
-  const seasonSegmentFinal = allowedSeasonSegments.has(rawSeasonSegment) ? rawSeasonSegment : "";
-
-  const rawDateFrom = pickQuery(req, "DateFrom", "dateFrom");
-  const rawDateTo = pickQuery(req, "DateTo", "dateTo");
-  const dateFromFinal = isoToNbaDate(rawDateFrom);
-  const dateToFinal = isoToNbaDate(rawDateTo);
+  const { nbaUrl, teamIdNum, season, seasonType, perMode, measureType } = built;
 
   // ✅ timeout tuning: Opponent is often slower
-  const timeoutMs = measureType === "Opponent" ? 30000 : 20000;
+  const timeoutMs = String(measureType).toLowerCase() === "opponent" ? 30000 : 20000;
   // ✅ longer cache for Opponent (reduces upstream hits during ingestion)
-  const cacheTtlMs = measureType === "Opponent" ? 120_000 : 60_000;
-
-  const nbaUrl = new URL("https://stats.nba.com/stats/teamdashboardbygeneralsplits");
-  nbaUrl.searchParams.set("Season", season);
-  nbaUrl.searchParams.set("SeasonType", seasonType);
-  nbaUrl.searchParams.set("LeagueID", "00");
-  nbaUrl.searchParams.set("PerMode", perMode);
-  nbaUrl.searchParams.set("TeamID", String(teamIdNum));
-  nbaUrl.searchParams.set("MeasureType", measureType);
-  nbaUrl.searchParams.set("PlusMinus", plusMinus);
-  nbaUrl.searchParams.set("PaceAdjust", "N");
-  nbaUrl.searchParams.set("Rank", "N");
-  nbaUrl.searchParams.set("PORound", "0");
-  nbaUrl.searchParams.set("Outcome", "");
-  nbaUrl.searchParams.set("Month", "0");
-  nbaUrl.searchParams.set("Location", locationFinal);
-  nbaUrl.searchParams.set("SeasonSegment", seasonSegmentFinal);
-  nbaUrl.searchParams.set("DateFrom", dateFromFinal);
-  nbaUrl.searchParams.set("DateTo", dateToFinal);
-  nbaUrl.searchParams.set("OpponentTeamID", "0");
-  nbaUrl.searchParams.set("VsConference", "");
-  nbaUrl.searchParams.set("VsDivision", "");
-  nbaUrl.searchParams.set("GameSegment", "");
-  nbaUrl.searchParams.set("Period", "0");
-  nbaUrl.searchParams.set("LastNGames", "0");
+  const cacheTtlMs = String(measureType).toLowerCase() === "opponent" ? 120_000 : 60_000;
 
   console.log("[/nba/teamdashboard]", {
     season,
@@ -648,7 +652,58 @@ app.get("/nba/teamdashboard", async (req, res) => {
   });
 
   try {
-    // ✅ IMPORTANT: USE timeoutMs variable (not hardcoded 15000)
+    const out = await fetchNbaJson(nbaUrl.toString(), {
+      timeoutMs,
+      attempts: 3,
+      backoffMs: [700, 1500, 3000],
+      cacheTtlMs,
+    });
+
+    setCors(res);
+    if (out.ok) return res.status(out.status).json(out.json);
+    return res.status(out.status ?? 502).json(out);
+  } catch (err) {
+    setCors(res);
+    return res.status(500).json({
+      ok: false,
+      error: "NBA request failed",
+      details: err?.message ?? String(err),
+      code: err?.code ?? null,
+    });
+  }
+});
+
+/**
+ * ✅ NEW: /nba/teamdashboardbygeneralsplits
+ * This is the explicit route your Edge Function v8 will call.
+ * It hits the same upstream endpoint as /nba/teamdashboard, but:
+ * - avoids confusion
+ * - makes debugging URLs match your Edge trace
+ */
+app.get("/nba/teamdashboardbygeneralsplits", async (req, res) => {
+  const built = buildTeamDashboardByGeneralSplitsUrl(req);
+  if (built.error) {
+    setCors(res);
+    return res.status(400).json({ ok: false, error: built.error });
+  }
+
+  const { nbaUrl, teamIdNum, season, seasonType, perMode, measureType } = built;
+
+  // GeneralSplits can be a bit heavy; keep a slightly longer timeout than baseline
+  const timeoutMs = 25000;
+  const cacheTtlMs = 60_000;
+
+  console.log("[/nba/teamdashboardbygeneralsplits]", {
+    season,
+    seasonType,
+    perMode,
+    teamId: teamIdNum,
+    measureType,
+    timeoutMs,
+    cacheTtlMs,
+  });
+
+  try {
     const out = await fetchNbaJson(nbaUrl.toString(), {
       timeoutMs,
       attempts: 3,
